@@ -1,0 +1,29 @@
+# The action reviews its own pull requests against examples/CODING_STANDARDS.md.
+name: Dogfood
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: dogfood-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Base checkout: both the action code and the rules come from main, not from the PR.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+      - uses: ./
+        with:
+          api-key: ${{ secrets.ORQ_API_KEY }}
+          standards: examples/CODING_STANDARDS.md
