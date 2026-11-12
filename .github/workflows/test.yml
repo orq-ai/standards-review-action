@@ -1,0 +1,39 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m unittest discover -s tests -v
+      - name: Ruff
+        run: pipx run ruff check . && pipx run ruff format --check .
+
+  dry-run:
+    # Runs the action end to end on its own history without calling the model.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Dry run over the last commit
+        run: |
+          base=$(git rev-list --max-parents=0 HEAD | tail -1)
+          python3 scripts/standards_review.py --base "$base" --head HEAD \
+            --standards examples/CODING_STANDARDS.md --output "$RUNNER_TEMP/out.json" --dry-run

@@ -1,0 +1,157 @@
+name: Standards review
+description: Judge every file a pull request changes against the numbered rules in a coding standards Markdown file, using an orq.ai classifier model.
+author: Baukebrenninkmeijer
+branding:
+  icon: check-square
+  color: orange
+
+inputs:
+  api-key:
+    description: orq.ai API key with router access.
+    required: true
+  standards:
+    description: Path to the standards file, relative to the checkout. Rules are lines like `1. **Title.** Text`.
+    default: CODING_STANDARDS.md
+  model:
+    description: Classifier model on the orq.ai router.
+    default: orq/decider-4b
+  endpoint:
+    description: Classify endpoint (must be HTTPS).
+    default: https://api.orq.ai/v3/router/classify
+  ignore:
+    description: Newline-separated path globs to skip. Replaces the built-in list (lockfiles, images, PDFs, datasets, notebooks, archives, video, fonts) when set.
+    default: ''
+  extra-ignore:
+    description: Newline-separated path globs to skip in addition to the ignore list.
+    default: ''
+  max-calls:
+    description: Maximum model calls per run. Files past the budget are reported as incomplete coverage.
+    default: '80'
+  fail-on-findings:
+    description: Fail the job when there are violations or incomplete coverage. Crashes always fail.
+    default: 'false'
+  comment:
+    description: Create or update one findings comment on the pull request.
+    default: 'true'
+  comment-author:
+    description: Login that owns the findings comment; set it when github-token is not the default token.
+    default: github-actions[bot]
+  github-token:
+    description: Token used to fetch the PR head and post the comment.
+    default: ${{ github.token }}
+  base:
+    description: Base commit. Defaults to the pull request base SHA.
+    default: ${{ github.event.pull_request.base.sha }}
+  head:
+    description: Head commit. Defaults to the pull request head SHA.
+    default: ${{ github.event.pull_request.head.sha }}
+
+outputs:
+  violations:
+    description: Number of rule violations found.
+    value: ${{ steps.review.outputs.violations }}
+  incomplete:
+    description: Number of files (or the call budget) that could not be judged.
+    value: ${{ steps.review.outputs.incomplete }}
+  exit-code:
+    description: 0 clean, 1 findings or incomplete coverage, 2 crash.
+    value: ${{ steps.review.outputs.exit-code }}
+  report-json:
+    description: Path to the JSON report.
+    value: ${{ runner.temp }}/standards-review.json
+  report-markdown:
+    description: Path to the Markdown report.
+    value: ${{ runner.temp }}/standards-review.md
+
+runs:
+  using: composite
+  steps:
+    - name: Fetch PR head and merge base
+      shell: bash
+      env:
+        BASE_SHA: ${{ inputs.base }}
+        HEAD_SHA: ${{ inputs.head }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
+          echo "::error::base and head are required outside pull_request events"
+          exit 2
+        fi
+        # PR code is fetched as data only; nothing from it is executed.
+        if ! git cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null; then
+          if [ -n "$PR_NUMBER" ]; then
+            git fetch --no-tags --depth=1 origin "refs/pull/${PR_NUMBER}/head"
+          else
+            git fetch --no-tags --depth=1 origin "$HEAD_SHA"
+          fi
+        fi
+        git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null || git fetch --no-tags --depth=1 origin "$BASE_SHA"
+        # The review diffs from the merge base, so deepen both sides until it is reachable.
+        for depth in 50 200 1000; do
+          git merge-base "$BASE_SHA" "$HEAD_SHA" > /dev/null 2>&1 && exit 0
+          git fetch --no-tags --deepen="$depth" origin "$BASE_SHA" "$HEAD_SHA" 2>/dev/null \
+            || git fetch --no-tags --deepen="$depth" origin "$BASE_SHA"
+        done
+        git merge-base "$BASE_SHA" "$HEAD_SHA" > /dev/null 2>&1 || git fetch --no-tags --unshallow origin
+
+    - name: Judge changed files
+      id: review
+      shell: bash
+      env:
+        ORQ_API_KEY: ${{ inputs.api-key }}
+        BASE_SHA: ${{ inputs.base }}
+        HEAD_SHA: ${{ inputs.head }}
+        STANDARDS: ${{ inputs.standards }}
+        MODEL: ${{ inputs.model }}
+        ENDPOINT: ${{ inputs.endpoint }}
+        IGNORE: ${{ inputs.ignore }}
+        EXTRA_IGNORE: ${{ inputs.extra-ignore }}
+        MAX_CALLS: ${{ inputs.max-calls }}
+        SCRIPT: ${{ github.action_path }}/scripts/standards_review.py
+        OUT_DIR: ${{ runner.temp }}
+      run: |
+        args=(--base "$BASE_SHA" --head "$HEAD_SHA" --standards "$STANDARDS" --model "$MODEL"
+              --endpoint "$ENDPOINT" --max-calls "$MAX_CALLS"
+              --output "$OUT_DIR/standards-review.json" --markdown-output "$OUT_DIR/standards-review.md")
+        while IFS= read -r pattern; do
+          [ -n "$pattern" ] && args+=(--ignore "$pattern")
+        done <<< "$IGNORE"
+        while IFS= read -r pattern; do
+          [ -n "$pattern" ] && args+=(--extra-ignore "$pattern")
+        done <<< "$EXTRA_IGNORE"
+        set +e
+        python3 "$SCRIPT" "${args[@]}"
+        status=$?
+        echo "exit-code=$status" >> "$GITHUB_OUTPUT"
+        # Never fail here, so the comment step still reports the outcome; the last step applies the policy.
+        exit 0
+
+    - name: Update PR findings comment
+      if: ${{ !cancelled() && inputs.comment == 'true' && github.event.pull_request.number != '' }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        COMMENT_AUTHOR: ${{ inputs.comment-author }}
+        SCRIPT: ${{ github.action_path }}/scripts/post_comment.py
+        REPORT: ${{ runner.temp }}/standards-review.md
+      run: python3 "$SCRIPT" --report "$REPORT"
+
+    - name: Apply failure policy
+      shell: bash
+      env:
+        STATUS: ${{ steps.review.outputs.exit-code }}
+        FAIL_ON_FINDINGS: ${{ inputs.fail-on-findings }}
+      run: |
+        if [ -z "$STATUS" ] || [ "$STATUS" -gt 1 ]; then
+          echo "::error::Standards review crashed (exit ${STATUS:-unknown}); see the step above."
+          exit 2
+        fi
+        if [ "$STATUS" -eq 1 ]; then
+          if [ "$FAIL_ON_FINDINGS" = "true" ]; then
+            echo "::error::Coding standards findings or incomplete coverage."
+            exit 1
+          fi
+          echo "::warning::Coding standards findings or incomplete coverage (advisory)."
+        fi
