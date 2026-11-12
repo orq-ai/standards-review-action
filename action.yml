@@ -1,13 +1,13 @@
 name: Standards review
 description: Judge every file a pull request changes against the numbered rules in a coding standards Markdown file, using an orq.ai classifier model.
-author: Baukebrenninkmeijer
+author: orq.ai
 branding:
   icon: check-square
-  color: orange
+  color: green
 
 inputs:
   api-key:
-    description: orq.ai API key with router access.
+    description: orq.ai API key with the classify.execute permission.
     required: true
   standards:
     description: Path to the standards file, relative to the checkout. Rules are lines like `1. **Title.** Text`.
