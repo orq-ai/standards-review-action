@@ -29,6 +29,7 @@ MAX_TOKENS = 26_000
 MAX_CHARS = MAX_TOKENS * 3
 MAX_DIFF_BYTES = 1_000_000
 DEFAULT_MAX_CALLS = 80
+TITLE = '## Standards review'
 RULE = re.compile(r'^(\d+)\. \*\*(.+?)\*\* (.+)$')
 HUNK = re.compile(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@')
 DEFAULT_IGNORE = (
@@ -184,7 +185,11 @@ def classify(
         with urlopen(request, timeout=90) as response:  # noqa: S310 - endpoint is checked to be HTTPS above.
             payload = json.load(response)
     except HTTPError as error:
-        raise RuntimeError(f'classifier HTTP {error.code}: {error.read(500).decode(errors="replace")}') from error
+        detail = error.read(500).decode(errors='replace')
+        hint = ''
+        if error.code in {401, 403}:
+            hint = ' Check that the orq.ai API key is valid and has the classify.execute permission.'
+        raise RuntimeError(f'classifier HTTP {error.code}: {detail}{hint}') from error
     except URLError as error:
         raise RuntimeError(f'classifier request failed: {error.reason}') from error
     if not isinstance(payload, dict):
@@ -212,10 +217,13 @@ def summary(
     model: str = DEFAULT_MODEL,
 ) -> str:
     counts = {number: Counter(row['verdicts'][number] for row in results) for number in rules}
+    files = len({row['path'] for row in results})
     lines = [
-        '## Coding standards review',
+        TITLE,
         '',
-        f'Judged {len({row["path"] for row in results})} files in {len(results)} model calls.',
+        headline(results, incomplete, rules),
+        '',
+        f'<sub>{plural(files, "file")} · {plural(len(rules), "rule")} · {plural(len(results), "model call")}</sub>',
         '',
     ]
     lines += ['| Rule | Pass | Violations | Not applicable | Score |', '| --- | ---: | ---: | ---: | ---: |']
@@ -249,11 +257,43 @@ def summary(
         lines += ['', f'Ignored {len(ignored)} files matching the ignore patterns or with binary diffs.']
     lines += [
         '',
-        'Each call judges one file; the line is where its first diff chunk starts, not the exact violating line.',
-        '',
-        f'{escape(model)} verdicts are a judgment aid. Review a flagged diff in context before changing code.',
+        '<sub>Line numbers point at the start of the diff chunk that was judged, not the exact line. '
+        f'Verdicts come from {escape(model)} reading diffs: a second opinion, not a merge gate. '
+        'Look at the code in context before you change it.</sub>',
     ]
     return '\n'.join(lines) + '\n'
+
+
+def plural(count: int, noun: str) -> str:
+    return f'{count} {noun}' if count == 1 else f'{count} {noun}s'
+
+
+def headline(results: list[dict], incomplete: list[dict], rules: dict[str, str]) -> str:
+    """One line that says what the reader needs to do, before any table."""
+    violations = sum(verdict == 'violation' for row in results for verdict in row['verdicts'].values())
+    flagged = {row['path'] for row in results if 'violation' in row['verdicts'].values()}
+    if violations:
+        line = f'**{plural(violations, "thing")} worth a second look** in {plural(len(flagged), "file")}.'
+        if incomplete:
+            line += f' {plural(len(incomplete), "item")} could not be read; see Incomplete coverage.'
+        return line
+    if incomplete:
+        return (
+            f'**Nothing flagged in what I could read**, but {plural(len(incomplete), "item")} '
+            'stayed out of reach; see Incomplete coverage.'
+        )
+    if not results:
+        return '**Nothing to judge.** Every changed file was ignored or had a binary diff.'
+    files = len({row['path'] for row in results})
+    return f'**All clear.** {plural(files, "file")} read against {plural(len(rules), "rule")}, nothing to flag.'
+
+
+def failure_report(error: Exception) -> str:
+    return (
+        f'{TITLE}\n\n**Could not finish this review.** The run stopped before any verdict was posted:\n\n'
+        f'<pre>{escape(str(error))}</pre>\n\n'
+        'Nothing here means the code passed. Fix the error above and push again, or re-run the job.\n'
+    )
 
 
 def annotation(path: str, line: int, message: str) -> str:
@@ -285,6 +325,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    try:
+        return review(args)
+    except Exception as error:
+        # Leave a report behind so the PR comment explains the failure instead of going silent.
+        args.markdown_output.write_text(failure_report(error))
+        raise
+
+
+def review(args: argparse.Namespace) -> int:
     if args.max_calls < 1:
         raise ValueError('--max-calls must be at least 1')
     patterns = [*(DEFAULT_IGNORE if args.ignore is None else args.ignore), *args.extra_ignore]

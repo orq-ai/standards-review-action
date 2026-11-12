@@ -54,8 +54,11 @@ def comment_body(report: Path, run_url: str) -> str:
     if report.is_file():
         findings = report.read_text()
     else:
-        findings = '## Coding standards review\n\nThe review did not finish. Inspect the workflow run for the error.\n'
-    footer = f'\n[Full check run and artifacts]({run_url})\n'
+        findings = (
+            '## Standards review\n\n**Could not finish this review.** The job stopped before it wrote a report; '
+            'the workflow run has the error. Nothing here means the code passed.\n'
+        )
+    footer = f'\n<sub>[Workflow run]({run_url})</sub>\n'
     room = MAX_COMMENT_CHARS - len(MARKER) - len(footer) - 80
     if len(findings) > room:
         findings = (

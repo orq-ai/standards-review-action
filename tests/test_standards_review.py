@@ -223,6 +223,56 @@ class StandardsEvalTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'HTTPS'):
             subject.classify('k', 'a.py', '+x\n', {'1': 'Rule.'}, endpoint='http://example.com/classify')
 
+    def test_headline_says_what_to_do_first(self):
+        rules = {'1': 'Rule one.', '2': 'Rule two.'}
+        clean = [{'path': 'a.py', 'line': 1, 'chunk': 1, 'verdicts': {'1': 'pass', '2': 'not_applicable'}}]
+        flagged = [
+            {'path': 'a.py', 'line': 1, 'chunk': 1, 'verdicts': {'1': 'violation', '2': 'violation'}},
+            {'path': 'b.py', 'line': 1, 'chunk': 2, 'verdicts': {'1': 'pass', '2': 'pass'}},
+        ]
+        missing = [{'path': 'big.html', 'reason': 'one diff line exceeds chunk limit'}]
+        self.assertIn('**All clear.** 1 file read against 2 rules', subject.headline(clean, [], rules))
+        self.assertIn('**2 things worth a second look** in 1 file.', subject.headline(flagged, [], rules))
+        self.assertIn('1 item could not be read', subject.headline(flagged, missing, rules))
+        self.assertIn('Nothing flagged in what I could read', subject.headline(clean, missing, rules))
+        self.assertIn('Nothing to judge', subject.headline([], [], rules))
+        report = subject.summary(flagged, [], [], rules)
+        self.assertLess(report.index('worth a second look'), report.index('| Rule |'))
+
+    def test_crash_leaves_a_report_that_does_not_read_as_a_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            standards = root / 'standards.md'
+            standards.write_text('1. **Rule.** Text.\n')
+            markdown = root / 'o.md'
+            argv = ['--base', 'b', '--head', 'h', '--standards', str(standards), '--output', str(root / 'o.json')]
+            argv += ['--markdown-output', str(markdown)]
+            boom = RuntimeError('classifier HTTP 403: <denied>')
+            with (
+                patch.dict(os.environ, {'ORQ_API_KEY': 'k'}),
+                patch.object(subject, 'git', return_value=b'base\n'),
+                patch.object(subject, 'changed_paths', return_value=['a.py']),
+                patch.object(subject, 'chunks_for', return_value=[(1, '@@ -1 +1 @@\n+x\n')]),
+                patch.object(subject, 'classify', side_effect=boom),
+                patch('sys.stdout', new_callable=io.StringIO),
+                self.assertRaises(RuntimeError),
+            ):
+                subject.main(argv)
+            text = markdown.read_text()
+            self.assertIn('Could not finish this review', text)
+            self.assertIn('&lt;denied&gt;', text)
+            self.assertNotIn('All clear', text)
+
+    def test_permission_error_names_the_missing_permission(self):
+        from urllib.error import HTTPError
+
+        error = HTTPError('https://x', 403, 'Forbidden', {}, io.BytesIO(b'{"error": "Missing permission"}'))
+        with (
+            patch.object(subject, 'urlopen', side_effect=error),
+            self.assertRaisesRegex(RuntimeError, 'classify.execute'),
+        ):
+            subject.classify('k', 'a.py', '+x\n', {'1': 'Rule.'})
+
 
 if __name__ == '__main__':
     unittest.main()

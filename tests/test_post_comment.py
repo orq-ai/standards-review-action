@@ -57,7 +57,7 @@ class CommentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             report = Path(directory) / 'report.md'
             missing = subject.comment_body(report, 'https://github.com/run')
-            self.assertIn('did not finish', missing)
+            self.assertIn('Could not finish', missing)
             report.write_text('## Scores\n' + ('finding\n' * 15_000))
             truncated = subject.comment_body(report, 'https://github.com/run')
             self.assertLessEqual(len(truncated), subject.MAX_COMMENT_CHARS)
