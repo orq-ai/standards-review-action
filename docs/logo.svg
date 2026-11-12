@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="standards-review-action logo">
+  <rect width="128" height="128" rx="28" fill="#025558"/>
+  <g stroke-linecap="round" stroke-width="9">
+    <line x1="28" y1="40" x2="74" y2="40" stroke="#f9f8f6"/>
+    <line x1="28" y1="64" x2="74" y2="64" stroke="#f9f8f6"/>
+    <line x1="28" y1="88" x2="74" y2="88" stroke="#f9f8f6"/>
+  </g>
+  <g fill="none" stroke="#28FFE2" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="86,40 92,46 103,34"/>
+    <polyline points="86,88 92,94 103,82"/>
+  </g>
+  <circle cx="94" cy="64" r="8" fill="#ff8f34"/>
+</svg>

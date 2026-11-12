@@ -1,34 +1,24 @@
-# standards-review-action
+<p align="center">
+  <img src="docs/banner.png" alt="standards-review-action: your rulebook, read on every PR" width="100%">
+</p>
 
-A GitHub Action that reviews a pull request against your own coding standards file.
+<p align="center">
+  <a href="https://github.com/orq-ai/standards-review-action/actions/workflows/test.yml"><img alt="Tests" src="https://github.com/orq-ai/standards-review-action/actions/workflows/test.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-025558"></a>
+  <img alt="Python 3.10+, standard library only" src="https://img.shields.io/badge/python-3.10%2B%20%C2%B7%20stdlib%20only-ff8f34">
+</p>
 
-You write the rules as a numbered Markdown list. For every file the PR changes, the action sends the diff to a classifier model on the [orq.ai](https://orq.ai) router (default `orq/decider-4b`). It asks one question per rule: `pass`, `violation`, or `not_applicable`. The results go into one PR comment that is edited on every push, plus warning annotations on the flagged files and a job summary.
+Every team has a `CODING_STANDARDS.md`. Most of them are read once, at onboarding, by the person who wrote them.
 
-```
-## Coding standards review
+**standards-review-action** reads yours on every pull request. For each changed file it asks a small classifier model on the [orq.ai](https://orq.ai) router one question per rule (pass, violation, or not applicable), then leaves **one** comment on the PR and keeps it up to date as you push.
 
-Judged 14 files in 14 model calls.
+It is a second opinion, not a gatekeeper. By default it never blocks a merge.
 
-| Rule | Pass | Violations | Not applicable | Score |
-| --- | ---: | ---: | ---: | ---: |
-| 1. Distinguish absence from failure | 3 | 1 | 10 | 75% |
-| 2. Test the behavior behind the claim | 4 | 0 | 10 | 100% |
-...
-### Violations
+## Quickstart
 
-- src/fetch.py:42 call 3: rule 1 — Distinguish absence from failure. ...
-```
-
-## Standards file format
-
-Any line matching `N. **Title.** Explanation` is a rule. Everything else is ignored. See [`examples/CODING_STANDARDS.md`](examples/CODING_STANDARDS.md).
-
-```markdown
-1. **Distinguish absence from failure.** Do not turn a failed call into an empty result.
-2. **Test the behavior behind the claim.** A behavior change comes with a test that fails without it.
-```
-
-## Usage
+1. Put a numbered list of rules in `CODING_STANDARDS.md` ([format](#write-your-rulebook)).
+2. Add an `ORQ_API_KEY` repository secret. The key needs the `classify.execute` permission.
+3. Add `.github/workflows/standards-review.yml`:
 
 ```yaml
 name: Standards review
@@ -52,41 +42,60 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      # Check out the base, so the standards file comes from trusted code, not the PR.
+      # Base checkout: the rules come from main, so a PR cannot rewrite the rules it is judged by.
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
-          fetch-depth: 1
-      - uses: Baukebrenninkmeijer/standards-review-action@v1   # pin to a commit SHA in production
+      - uses: orq-ai/standards-review-action@v1   # or pin a commit SHA
         with:
           api-key: ${{ secrets.ORQ_API_KEY }}
-          standards: CODING_STANDARDS.md
 ```
 
-**Why `pull_request_target` and a base checkout.** The action only reads PR commits as data: it fetches them and diffs them, but never runs them. The scripts come from the action ref and the standards file comes from the base branch, so a PR cannot change the rules it is judged against. A plain `pull_request` trigger also works, but then forks get no secrets, and a PR can edit the standards file it is judged by.
+That's it. The next PR gets a comment.
 
-The action diffs from the merge base, the same view as GitHub's "Files changed" tab. It deepens a shallow clone as needed, so `fetch-depth: 1` is enough.
+## What you'll see
 
-### Inputs
+One comment per PR, edited in place on every push. It opens with the line you actually need:
 
-| Input | Default | Description |
+| Situation | Headline |
+| --- | --- |
+| Violations found | **2 things worth a second look** in 1 file. |
+| Some files could not be read | **Nothing flagged in what I could read**, but 1 item stayed out of reach; see Incomplete coverage. |
+| Clean | **All clear.** 6 files read against 4 rules, nothing to flag. |
+| Only lockfiles and images changed | **Nothing to judge.** Every changed file was ignored or had a binary diff. |
+| The run broke | **Could not finish this review.** followed by the error. A crash never reads as a pass. |
+
+Below the headline: a per-rule table (pass / violations / not applicable / score), the list of violations with file and line, and anything it skipped. Violations also show up as warning annotations on the diff and in the job summary.
+
+## Write your rulebook
+
+Any line shaped like `N. **Title.** Explanation` is a rule. Everything else (headings, prose, examples, sub-bullets) is context for humans and is ignored.
+
+```markdown
+1. **Distinguish absence from failure.** Do not turn a failed call into an empty result.
+2. **Test the behavior behind the claim.** A behavior change comes with a test that fails without it.
+```
+
+Rules that work well are concrete enough to spot in a diff. "Write clean code" will be `not_applicable` forever; "Never catch bare `Exception` without re-raising" will not. A starter set lives in [`examples/CODING_STANDARDS.md`](examples/CODING_STANDARDS.md).
+
+## Inputs
+
+| Input | Default | What it does |
 | --- | --- | --- |
-| `api-key` | required | orq.ai API key with router access |
-| `standards` | `CODING_STANDARDS.md` | Standards file path in the checkout |
-| `model` | `orq/decider-4b` | Classifier model |
+| `api-key` | required | orq.ai API key with `classify.execute` |
+| `standards` | `CODING_STANDARDS.md` | Path to the rulebook in the checkout |
+| `model` | `orq/decider-4b` | Classifier model on the orq.ai router |
 | `endpoint` | `https://api.orq.ai/v3/router/classify` | Classify endpoint (HTTPS only) |
 | `ignore` | lockfiles, images, PDFs, CSV/JSONL/Parquet, notebooks, archives, video, fonts | Newline-separated globs; replaces the defaults |
-| `extra-ignore` | empty | Newline-separated globs added to the ignore list |
-| `max-calls` | `80` | Call budget; files past it are reported as incomplete coverage |
-| `fail-on-findings` | `false` | Fail the job on violations or incomplete coverage |
-| `comment` | `true` | Create or update one PR comment |
+| `extra-ignore` | empty | Newline-separated globs on top of the ignore list |
+| `max-calls` | `80` | Model-call budget per run; the rest is reported as incomplete coverage |
+| `fail-on-findings` | `false` | Turn it from advisor into gate: fail on violations or incomplete coverage |
+| `comment` | `true` | Create and update the PR comment |
 | `comment-author` | `github-actions[bot]` | Login that owns the comment, if you pass another token |
-| `github-token` | `github.token` | Token for fetching and commenting |
+| `github-token` | `github.token` | Token for fetching the PR and commenting |
 | `base` / `head` | PR base / head SHA | Commits to compare, for non-PR events |
 
-### Outputs
-
-`violations`, `incomplete`, `exit-code` (0 clean, 1 findings, 2 crash), `report-json`, `report-markdown`. To keep the reports:
+**Outputs:** `violations`, `incomplete`, `exit-code` (0 clean, 1 findings, 2 crash), `report-json`, `report-markdown`. Keep the reports with:
 
 ```yaml
       - uses: actions/upload-artifact@v4
@@ -98,16 +107,23 @@ The action diffs from the merge base, the same view as GitHub's "Files changed" 
 
 ## How it judges
 
-- **One call per file.** Each changed file gets its own call, so a violation is tied to its file. A diff over about 26k tokens (78k characters) is split into as few calls as fit. Files never share a call.
-- **Advisory by default.** Findings and incomplete coverage leave the job green with a warning. A crash in the script, API, or comment step always fails the job.
-- **Fail closed on bad answers.** A missing, extra, or invalid verdict from the model is an error, not a pass.
-- **Bounded.** A file's diff is capped at 1 MB, a single diff line must fit in one chunk, and the call budget caps cost. Anything skipped shows up under "Incomplete coverage".
-- **Skipped.** Paths that match the ignore globs, and files with binary diffs.
-- **Location.** The reported line is where the file's first diff chunk in that call starts, not the exact violating line.
+- **One file per call.** A file's diff is judged on its own, so a violation points at its file. Diffs over about 26k tokens are split into as few calls as fit; files never share a call.
+- **Same view as "Files changed".** It diffs from the merge base, so commits that landed on `main` after you branched are not your problem.
+- **Fails closed.** A missing, extra, or malformed verdict from the model is an error, never a silent pass.
+- **Bounded.** 1 MB per file diff, one diff line must fit in a chunk, and `max-calls` caps spend. Anything it had to skip is listed, not hidden.
+- **PR code is data.** It is fetched and diffed, never executed. The scripts run from the action ref and the rules from the base checkout.
 
-The verdicts help a reviewer decide; they do not replace one. Review a flagged diff in context before changing code.
+## Things worth knowing
 
-## Run locally
+**Most verdicts are "not applicable".** That's expected: a rule about tests rarely applies to a YAML change. Scores are per rule over pass + violation only, so watch the counts, not just the percentage.
+
+**Line numbers are approximate.** They point at the start of the judged diff chunk, not the exact offending line.
+
+**`pull_request` instead of `pull_request_target`?** Works too, but forks get no secrets, and a PR could edit the rulebook it is judged against.
+
+**Getting `HTTP 403 Missing permission: classify.execute`?** Your orq.ai key exists but cannot call the classify endpoint. Grant it that permission in the orq.ai workspace, or use a key that has it.
+
+## Run it locally
 
 Python 3.10+, standard library only.
 
@@ -120,4 +136,4 @@ python3 -m unittest discover -s tests
 
 ## License
 
-MIT
+[MIT](LICENSE), from the research team at [orq.ai](https://orq.ai).
