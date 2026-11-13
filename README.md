@@ -10,14 +10,14 @@
 
 Every team has a `CODING_STANDARDS.md`. Most of them are read once, at onboarding, by the person who wrote them.
 
-**standards-review-action** reads yours on every pull request. For each changed file it asks a small classifier model on the [orq.ai](https://orq.ai) router one question per rule (pass, violation, or not applicable), then leaves **one** comment on the PR and keeps it up to date as you push.
+**standards-review-action** reads yours on every pull request. For each changed file it asks a small decision model on the [orq.ai](https://orq.ai) router one question per rule (pass, violation, or not applicable), then leaves **one** comment on the PR and keeps it up to date as you push.
 
 It is a second opinion, not a gatekeeper. By default it never blocks a merge.
 
 ## Quickstart
 
 1. Put a numbered list of rules in `CODING_STANDARDS.md` ([format](#write-your-rulebook)).
-2. Add an `ORQ_API_KEY` repository secret. The key needs the `classify.execute` permission.
+2. Add an `ORQ_API_KEY` repository secret. The key needs the Classify (`classify.execute`) permission, which the decisions endpoint requires.
 3. Add `.github/workflows/standards-review.yml`:
 
 ```yaml
@@ -67,6 +67,55 @@ One comment per PR, edited in place on every push. It opens with the line you ac
 
 Below the headline: a per-rule table (pass / violations / not applicable / score), the list of violations with file and line, and anything it skipped. Violations also show up as warning annotations on the diff and in the job summary.
 
+## Example
+
+A real run against the four rules in [`examples/CODING_STANDARDS.md`](examples/CODING_STANDARDS.md). The PR changes two files:
+
+```diff
+--- a/src/prices.py
++++ b/src/prices.py
+ def fetch_prices(url: str) -> list[dict]:
+-    with urlopen(url, timeout=10) as response:
+-        return json.load(response)
++    try:
++        with urlopen(url) as response:
++            return json.load(response)
++    except Exception:
++        return []
+--- /dev/null
++++ b/src/retry.py
++def call_until_ok(fn):
++    while True:
++        try:
++            return fn()
++        except Exception:
++            time.sleep(1)
+```
+
+And this is the comment it left:
+
+> ## Standards review
+>
+> **1 thing worth a second look** in 1 file.
+>
+> <sub>2 files · 4 rules · 2 model calls</sub>
+>
+> | Rule | Pass | Violations | Not applicable | Score |
+> | --- | ---: | ---: | ---: | ---: |
+> | 1. Distinguish absence from failure | 0 | 1 | 1 | 0% |
+> | 2. Test the behavior behind the claim | 0 | 0 | 2 | N/A |
+> | 3. Correct stale claims with the change | 0 | 0 | 2 | N/A |
+> | 4. Bound automation and privilege | 0 | 0 | 2 | N/A |
+> | **Overall** | **0** | **1** | | **0%** |
+>
+> ### Violations
+>
+> - <code>src/prices.py:3</code> call 1: rule 1 — Distinguish absence from failure. Do not turn a failed call, parse error, or timeout into an empty result, a default value, or a silent skip. Raise, or return a result that says it failed.
+>
+> <sub>Line numbers point at the start of the diff chunk that was judged, not the exact line. Verdicts come from orq/decider-4b reading diffs: a second opinion, not a merge gate. Look at the code in context before you change it.</sub>
+
+It caught the swallowed failure in `prices.py`. It did not flag the unbounded retry loop in `retry.py` against rule 4, which a human reviewer probably would. That is the "second opinion" part: it narrows where to look, it does not replace looking. The same rules on a cleaned-up version of this PR come back **All clear.**
+
 ## Write your rulebook
 
 Any line shaped like `N. **Title.** Explanation` is a rule. Everything else (headings, prose, examples, sub-bullets) is context for humans and is ignored.
@@ -82,10 +131,10 @@ Rules that work well are concrete enough to spot in a diff. "Write clean code" w
 
 | Input | Default | What it does |
 | --- | --- | --- |
-| `api-key` | required | orq.ai API key with `classify.execute` |
+| `api-key` | required | orq.ai API key with the Classify (`classify.execute`) permission |
 | `standards` | `CODING_STANDARDS.md` | Path to the rulebook in the checkout |
-| `model` | `orq/decider-4b` | Classifier model on the orq.ai router |
-| `endpoint` | `https://api.orq.ai/v3/router/classify` | Classify endpoint (HTTPS only) |
+| `model` | `orq/decider-4b` | Decision model on the orq.ai router |
+| `endpoint` | `https://api.orq.ai/v3/router/decisions` | [Decisions](https://docs.orq.ai/ai-gateway/features/decisions) endpoint (HTTPS only) |
 | `ignore` | lockfiles, images, PDFs, CSV/JSONL/Parquet, notebooks, archives, video, fonts | Newline-separated globs; replaces the defaults |
 | `extra-ignore` | empty | Newline-separated globs on top of the ignore list |
 | `max-calls` | `80` | Model-call budget per run; the rest is reported as incomplete coverage |
@@ -121,7 +170,7 @@ Rules that work well are concrete enough to spot in a diff. "Write clean code" w
 
 **`pull_request` instead of `pull_request_target`?** Works too, but forks get no secrets, and a PR could edit the rulebook it is judged against.
 
-**Getting `HTTP 403 Missing permission: classify.execute`?** Your orq.ai key exists but cannot call the classify endpoint. Grant it that permission in the orq.ai workspace, or use a key that has it.
+**Getting `HTTP 403 Missing permission: classify.execute`?** Your orq.ai key exists but cannot call the decisions endpoint, which still checks the permission named Classify. Grant it that permission in the orq.ai workspace, or use a key that has it.
 
 ## Run it locally
 
