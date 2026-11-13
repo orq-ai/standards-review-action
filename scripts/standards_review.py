@@ -1,6 +1,6 @@
 """Judge each file a pull request changes against the numbered rules in a standards file.
 
-Each changed file's diff goes to an orq.ai classifier model (default orq/decider-4b)
+Each changed file's diff goes to an orq.ai decision model (default orq/decider-4b)
 with one choice question per rule: pass, violation, or not_applicable.
 
 Run this script from trusted code. It reads PR commits as data only.
@@ -22,7 +22,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 DEFAULT_MODEL = 'orq/decider-4b'
-DEFAULT_ENDPOINT = 'https://api.orq.ai/v3/router/classify'
+DEFAULT_ENDPOINT = 'https://api.orq.ai/v3/router/decisions'
 # Measured ~3.4 chars/token on Python diffs; 3 leaves margin for denser text.
 # A char heuristic, not a tokenizer: minified or non-Latin text can overshoot 26k tokens.
 MAX_TOKENS = 26_000
@@ -142,7 +142,7 @@ def labelled(path: str, diff: str) -> str:
     return f'--- {path}\n{diff}'
 
 
-def classify(
+def decide(
     api_key: str,
     path: str,
     diff: str,
@@ -188,23 +188,26 @@ def classify(
         detail = error.read(500).decode(errors='replace')
         hint = ''
         if error.code in {401, 403}:
-            hint = ' Check that the orq.ai API key is valid and has the classify.execute permission.'
-        raise RuntimeError(f'classifier HTTP {error.code}: {detail}{hint}') from error
+            hint = (
+                ' Check that the orq.ai API key is valid and has the Classify (classify.execute)'
+                ' permission, which the decisions endpoint requires.'
+            )
+        raise RuntimeError(f'decisions API HTTP {error.code}: {detail}{hint}') from error
     except URLError as error:
-        raise RuntimeError(f'classifier request failed: {error.reason}') from error
+        raise RuntimeError(f'decisions API request failed: {error.reason}') from error
     if not isinstance(payload, dict):
-        raise TypeError('classifier returned a non-object response')
+        raise TypeError('decisions API returned a non-object response')
     answers = payload.get('answers')
     if not isinstance(answers, dict) or set(answers) != {f'rule_{number}' for number in rules}:
-        raise ValueError('classifier returned missing or unexpected rule answers')
+        raise ValueError('decisions API returned missing or unexpected rule answers')
     verdicts = {}
     for number in rules:
         answer = answers[f'rule_{number}']
         if not isinstance(answer, dict) or answer.get('type') != 'choice':
-            raise ValueError(f'classifier returned invalid answer for rule {number}')
+            raise ValueError(f'decisions API returned invalid answer for rule {number}')
         verdict = answer.get('choice')
         if verdict not in {'pass', 'violation', 'not_applicable'}:
-            raise ValueError(f'classifier returned invalid verdict for rule {number}: {verdict!r}')
+            raise ValueError(f'decisions API returned invalid verdict for rule {number}: {verdict!r}')
         verdicts[number] = verdict
     return verdicts
 
@@ -364,7 +367,7 @@ def review(args: argparse.Namespace) -> int:
     for index, call in enumerate(calls, 1):
         path, line, _ = call[0]
         diff = ''.join(labelled(path, diff) for path, _, diff in call)
-        verdicts = {} if args.dry_run else classify(api_key, path, diff, rules, args.model, args.endpoint)
+        verdicts = {} if args.dry_run else decide(api_key, path, diff, rules, args.model, args.endpoint)
         results.append({'path': path, 'line': line, 'chunk': index, 'verdicts': verdicts})
         for number, verdict in verdicts.items():
             if verdict == 'violation':

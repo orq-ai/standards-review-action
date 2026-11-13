@@ -53,7 +53,7 @@ class StandardsEvalTests(unittest.TestCase):
             return FakeResponse(json.dumps(payload).encode())
 
         with patch.object(subject, 'urlopen', side_effect=respond):
-            verdicts = subject.classify('key', 'sample.py', '+return []\n', rules)
+            verdicts = subject.decide('key', 'sample.py', '+return []\n', rules)
         self.assertEqual(verdicts, {'1': 'violation', '2': 'not_applicable'})
         self.assertEqual(seen[0]['model'], 'orq/decider-4b')
         self.assertEqual(set(seen[0]['questions']), {'rule_1', 'rule_2'})
@@ -63,7 +63,7 @@ class StandardsEvalTests(unittest.TestCase):
             patch.object(subject, 'urlopen', return_value=FakeResponse(b'{"answers": {}}')),
             self.assertRaisesRegex(ValueError, 'missing or unexpected'),
         ):
-            subject.classify('key', 'sample.py', '+return []\n', rules)
+            subject.decide('key', 'sample.py', '+return []\n', rules)
 
     def test_binary_marker_is_exact(self):
         with (
@@ -165,7 +165,7 @@ class StandardsEvalTests(unittest.TestCase):
                 patch.object(subject, 'git', return_value=b'base\n'),
                 patch.object(subject, 'changed_paths', return_value=['sample.py']),
                 patch.object(subject, 'chunks_for', return_value=[(4, '@@ -4 +4 @@\n+return []\n')]),
-                patch.object(subject, 'classify', return_value={'1': 'violation'}),
+                patch.object(subject, 'decide', return_value={'1': 'violation'}),
                 patch('sys.stdout', new_callable=io.StringIO),
             ):
                 self.assertEqual(subject.main(), 1)
@@ -210,18 +210,18 @@ class StandardsEvalTests(unittest.TestCase):
                 patch.object(subject, 'git', return_value=b'base\n'),
                 patch.object(subject, 'changed_paths', return_value=['a.py', 'b.py']),
                 patch.object(subject, 'chunks_for', return_value=[(1, '@@ -1 +1 @@\n+x\n')]),
-                patch.object(subject, 'classify', return_value={'1': 'pass'}) as classify,
+                patch.object(subject, 'decide', return_value={'1': 'pass'}) as decide,
                 patch('sys.stdout', new_callable=io.StringIO),
             ):
                 self.assertEqual(subject.main(argv), 1)
-            self.assertEqual(classify.call_count, 1)
-            self.assertEqual(classify.call_args.args[4], 'org/other-model')
+            self.assertEqual(decide.call_count, 1)
+            self.assertEqual(decide.call_args.args[4], 'org/other-model')
             self.assertEqual(github_output.read_text(), 'violations=0\nincomplete=1\n')
             self.assertIn('2 calls exceed the 1-call budget', (root / 'o.md').read_text())
 
     def test_endpoint_must_be_https(self):
         with self.assertRaisesRegex(ValueError, 'HTTPS'):
-            subject.classify('k', 'a.py', '+x\n', {'1': 'Rule.'}, endpoint='http://example.com/classify')
+            subject.decide('k', 'a.py', '+x\n', {'1': 'Rule.'}, endpoint='http://example.com/decisions')
 
     def test_headline_says_what_to_do_first(self):
         rules = {'1': 'Rule one.', '2': 'Rule two.'}
@@ -247,13 +247,13 @@ class StandardsEvalTests(unittest.TestCase):
             markdown = root / 'o.md'
             argv = ['--base', 'b', '--head', 'h', '--standards', str(standards), '--output', str(root / 'o.json')]
             argv += ['--markdown-output', str(markdown)]
-            boom = RuntimeError('classifier HTTP 403: <denied>')
+            boom = RuntimeError('decisions API HTTP 403: <denied>')
             with (
                 patch.dict(os.environ, {'ORQ_API_KEY': 'k'}),
                 patch.object(subject, 'git', return_value=b'base\n'),
                 patch.object(subject, 'changed_paths', return_value=['a.py']),
                 patch.object(subject, 'chunks_for', return_value=[(1, '@@ -1 +1 @@\n+x\n')]),
-                patch.object(subject, 'classify', side_effect=boom),
+                patch.object(subject, 'decide', side_effect=boom),
                 patch('sys.stdout', new_callable=io.StringIO),
                 self.assertRaises(RuntimeError),
             ):
@@ -271,7 +271,7 @@ class StandardsEvalTests(unittest.TestCase):
             patch.object(subject, 'urlopen', side_effect=error),
             self.assertRaisesRegex(RuntimeError, 'classify.execute'),
         ):
-            subject.classify('k', 'a.py', '+x\n', {'1': 'Rule.'})
+            subject.decide('k', 'a.py', '+x\n', {'1': 'Rule.'})
 
 
 if __name__ == '__main__':

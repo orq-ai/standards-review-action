@@ -1,5 +1,5 @@
 name: Standards review
-description: Judge every file a pull request changes against the numbered rules in a coding standards Markdown file, using an orq.ai classifier model.
+description: Judge every file a pull request changes against the numbered rules in a coding standards Markdown file, using an orq.ai decision model.
 author: orq.ai
 branding:
   icon: check-square
@@ -7,17 +7,17 @@ branding:
 
 inputs:
   api-key:
-    description: orq.ai API key with the classify.execute permission.
+    description: orq.ai API key with the Classify (classify.execute) permission, which the decisions endpoint requires.
     required: true
   standards:
     description: Path to the standards file, relative to the checkout. Rules are lines like `1. **Title.** Text`.
     default: CODING_STANDARDS.md
   model:
-    description: Classifier model on the orq.ai router.
+    description: Decision model on the orq.ai router.
     default: orq/decider-4b
   endpoint:
-    description: Classify endpoint (must be HTTPS).
-    default: https://api.orq.ai/v3/router/classify
+    description: Decisions endpoint (must be HTTPS).
+    default: https://api.orq.ai/v3/router/decisions
   ignore:
     description: Newline-separated path globs to skip. Replaces the built-in list (lockfiles, images, PDFs, datasets, notebooks, archives, video, fonts) when set.
     default: ''
